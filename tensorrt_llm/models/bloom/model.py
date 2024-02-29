@@ -38,10 +38,9 @@ class BloomDecoderLayer(Module):
                                          dtype=dtype)
 
         self.attention = Attention(
-            layer_idx=layer_idx,
-            hidden_size=hidden_size,
-            num_attention_heads=config.num_attention_heads,
-            num_kv_heads=config.num_key_value_heads,
+            hidden_size,
+            config.num_attention_heads,
+            config.num_key_value_heads,
             num_layers=config.num_hidden_layers,
             dtype=dtype,
             attention_mask_type=AttentionMaskType.causal,

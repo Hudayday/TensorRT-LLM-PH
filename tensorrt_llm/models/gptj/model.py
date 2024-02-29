@@ -42,7 +42,6 @@ class GPTJDecoderLayer(Module):
                                          dtype=dtype)
 
         self.attention = Attention(
-            layer_idx=layer_idx,
             hidden_size=hidden_size,
             num_attention_heads=num_attention_heads,
             rotary_embedding_percentage=rotary_dim /
@@ -140,7 +139,11 @@ class GPTJModel(Module):
         if use_cache:
             presents = []
 
-        for layer, past in zip(self.layers, kv_cache_params.past_key_value):
+        for layer, past, pointer, host_pointer, max_attention_window_size in zip(
+                self.layers, kv_cache_params.past_key_value,
+                kv_cache_params.kv_cache_block_pointers,
+                kv_cache_params.host_kv_cache_block_pointers,
+                kv_cache_params.host_max_attention_window_sizes):
             hidden_states = layer(
                 hidden_states,
                 use_cache=use_cache,
@@ -148,14 +151,11 @@ class GPTJModel(Module):
                     past_key_value=[past],
                     host_past_key_value_lengths=kv_cache_params.
                     host_past_key_value_lengths,
-                    host_max_attention_window_sizes=kv_cache_params.
-                    host_max_attention_window_sizes,
+                    host_max_attention_window_sizes=max_attention_window_size,
                     host_sink_token_length=kv_cache_params.
                     host_sink_token_length,
-                    kv_cache_block_pointers=kv_cache_params.
-                    kv_cache_block_pointers,
-                    host_kv_cache_block_pointers=kv_cache_params.
-                    host_kv_cache_block_pointers,
+                    kv_cache_block_pointers=[pointer],
+                    host_kv_cache_block_pointers=[host_pointer],
                     cache_indirection=kv_cache_params.cache_indirection),
                 attention_params=attention_params)
 

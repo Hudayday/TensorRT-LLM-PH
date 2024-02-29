@@ -101,6 +101,13 @@ class Mapping(object):
                                 (self.pp_rank + 1) * layers_per_pipeline_stage)
         return list(layers_range)
 
+    '''
+    def pp_layers_unbalanced(self, num_layers: int, pp_map: List[int]) -> List[int]:
+        assert sum(pp_map) == num_layers
+        layers_range = range(sum(pp_map[:self.pp_rank]),sum(pp_map[:self.pp_rank+1]))
+        return list(layers_range)
+    '''
+
     def ep_experts(self, num_experts: int) -> List[int]:
         experts_per_rank = num_experts // self.tp_size
         experts_range = range(self.tp_rank * experts_per_rank,
