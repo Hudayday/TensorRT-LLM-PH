@@ -24,7 +24,7 @@ class Mapping(object):
     - [0, 1, 2, 3]
     - [4, 5, 6, 7]
 
-    4 pp groups:
+    4 pp groups:i
 
     - [0, 4]
     - [1, 5]
@@ -37,12 +37,14 @@ class Mapping(object):
                  rank=0,
                  gpus_per_node=8,
                  tp_size=1,
-                 pp_size=1):
+                 pp_size=1,
+                 pp_map=None):
         self.tp_size = tp_size
         self.pp_size = pp_size
         self.world_size = world_size
         self.rank = rank
         self.gpus_per_node = gpus_per_node
+        self.pp_map = pp_map
 
         if pp_size * tp_size != world_size:
             raise ValueError("world_size must equal to pp_size * tp_size")
@@ -90,9 +92,13 @@ class Mapping(object):
         return p
 
     def pp_layers(self, num_layers: int) -> List[int]:
-        layers_per_pipeline_stage = num_layers // self.pp_size
-        layers_range = range(self.pp_rank * layers_per_pipeline_stage,
-                             (self.pp_rank + 1) * layers_per_pipeline_stage)
+        if self.pp_map is not None:
+            assert sum(self.pp_map) == num_layers
+            layers_range = range(sum(self.pp_map[:self.pp_rank]),sum(self.pp_map[:self.pp_rank+1]))
+        else:
+            layers_per_pipeline_stage = num_layers // self.pp_size
+            layers_range = range(self.pp_rank * layers_per_pipeline_stage,
+                                (self.pp_rank + 1) * layers_per_pipeline_stage)
         return list(layers_range)
 
     def ep_experts(self, num_experts: int) -> List[int]:

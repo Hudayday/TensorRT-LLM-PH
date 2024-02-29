@@ -695,15 +695,15 @@ class GenerationSession(object):
     def num_layers(self):
         assert self._model_config.num_layers % self.mapping.pp_size == 0, \
             f"num_layers {self._model_config.num_layers} must be a multiple of pipeline parallelism size {self.mapping.pp_size}"
-        return self._model_config.num_layers // self.mapping.pp_size
+        return self.mapping.pp_map[self.mapping.pp_rank]
 
     @property
     def first_layer(self):
-        return self.num_layers * self.mapping.pp_rank
+        return sum(self.mapping.pp_map[:self.mapping.pp_rank])
 
     @property
     def last_layer(self):
-        return self.first_layer + self.num_layers
+        return sum(self.mapping.pp_map[:self.mapping.pp_rank+1])
 
     @property
     def num_heads(self):

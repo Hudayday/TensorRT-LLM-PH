@@ -49,6 +49,12 @@ def parse_arguments():
                         type=int,
                         default=1,
                         help='N-way pipeline parallelism size')
+    parser.add_argument('--pp_map',
+                        metavar='N',
+                        type=int,
+                        nargs='+',
+                        help='unbalanced PP maping'
+                        )
     parser.add_argument('--dtype',
                         type=str,
                         default='float16',
@@ -800,7 +806,8 @@ def convert_hf_llama(hf_model,
                      qkv_para=[],
                      smoother=[],
                      moe_config=None,
-                     lora_config=None):
+                     lora_config=None,
+                     pp_map=None):
 
     weights = {}
     tik = time.time()
@@ -1203,6 +1210,10 @@ def main():
     args = parse_arguments()
     world_size = args.tp_size * args.pp_size
 
+    pp_map = args.pp_map
+    if pp_map is not None:
+        assert len(pp_map) == args.pp_size
+
     tik = time.time()
 
     if not os.path.exists(args.output_dir):
@@ -1337,6 +1348,7 @@ def main():
             'world_size': world_size,
             'tp_size': args.tp_size,
             'pp_size': args.pp_size,
+            'pp_map' : args.pp_map,
         },
         'use_parallel_embedding': args.use_parallel_embedding,
         'embedding_sharding_dim': args.embedding_sharding_dim,

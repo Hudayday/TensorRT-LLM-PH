@@ -41,6 +41,7 @@ class PretrainedConfig:
                  pp_size: int,
                  quant_mode: QuantMode,
                  quant_kwargs: dict,
+                pp_map: List[int]=None,
                  use_prompt_tuning: bool = False,
                  use_parallel_embedding: bool = False,
                  embedding_sharding_dim: int = 0,
@@ -70,7 +71,8 @@ class PretrainedConfig:
         self.share_embedding_table = share_embedding_table
         self.mapping = Mapping(world_size=world_size,
                                tp_size=tp_size,
-                               pp_size=pp_size)
+                               pp_size=pp_size,
+                               pp_map=pp_map)
         self.quant_mode = quant_mode
         self.quant_kwargs = quant_kwargs
         self.kv_dtype = self.dtype
@@ -115,11 +117,13 @@ class PretrainedConfig:
         mapping = config.pop('mapping', {
             'world_size': 1,
             'tp_size': 1,
-            'pp_size': 1
+            'pp_size': 1,
+            'pp_map': None
         })
         world_size = mapping.get('world_size', 1)
         tp_size = mapping.get('tp_size', 1)
         pp_size = mapping.get('pp_size', 1)
+        pp_map = mapping.get('pp_map', None)
 
         if share_embedding_table and mapping.tp_size > 1:
             if (not use_parallel_embedding) or (use_parallel_embedding and
@@ -164,7 +168,7 @@ class PretrainedConfig:
                    max_position_embeddings, hidden_size, num_hidden_layers,
                    num_attention_heads, num_key_value_heads, hidden_act,
                    intermediate_size, norm_epsilon, position_embedding_type,
-                   world_size, tp_size, pp_size, quant_mode, quant_kwargs,
+                   world_size, tp_size, pp_size, quant_mode, quant_kwargs, pp_map,
                    use_prompt_tuning, use_parallel_embedding,
                    embedding_sharding_dim, share_embedding_table, max_lora_rank,
                    **config)
@@ -183,6 +187,7 @@ class PretrainedConfig:
             'world_size': self.mapping.world_size,
             'tp_size': self.mapping.tp_size,
             'pp_size': self.mapping.pp_size,
+            'pp_map': self.mapping.pp_map
         }
         output.pop('quant_mode')
         output.pop('quant_kwargs')
@@ -209,7 +214,8 @@ class PretrainedConfig:
         self.mapping = Mapping(self.mapping.world_size,
                                rank=rank,
                                tp_size=self.mapping.tp_size,
-                               pp_size=self.mapping.pp_size)
+                               pp_size=self.mapping.pp_size,
+                               pp_map=self.mapping.pp_map)
 
 
 class DecoderLayerList(ModuleList):
