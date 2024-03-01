@@ -14,9 +14,10 @@
 # limitations under the License.
 
 from ..._utils import pad_vocab_size
-from ...functional import PositionEmbeddingType, Tensor, allreduce
+from ...functional import PositionEmbeddingType, Tensor, allreduce, recv, send
 from ...layers import (MLP, Attention, AttentionMaskType, ColumnLinear,
                        Embedding, KeyValueCacheParams, LayerNorm)
+from ...mapping import Mapping
 from ...module import Module
 from ..modeling_utils import (DecoderLayerList, DecoderModelForCausalLM,
                               PretrainedConfig)
@@ -104,7 +105,7 @@ class GPTJModel(Module):
     def __init__(self, config: PretrainedConfig):
         super().__init__()
         self.config = config
-
+        self.mapping = config.mapping
         if config.mapping.is_first_pp_rank():
             if config.use_parallel_embedding:
                 self.vocab_embedding = Embedding(
@@ -129,10 +130,14 @@ class GPTJModel(Module):
                 position_ids=None,
                 use_cache=False,
                 attention_mask=None,
+                hidden_states=None,
                 kv_cache_params=None,
                 attention_params=None):
 
-        hidden_states = self.vocab_embedding(input_ids)
+        if self.config.mapping.is_first_pp_rank():
+            hidden_states = self.vocab_embedding(input_ids)
+        else:
+            hidden_states = recv(hidden_states, self.mapping.prev_pp_rank())
 
         kv_cache_params.fill_none_tensor_list(len(self.layers))
 
@@ -163,7 +168,10 @@ class GPTJModel(Module):
                 presents.append(hidden_states[1])
                 hidden_states = hidden_states[0]
 
-        hidden_states = self.ln_f(hidden_states)
+        if self.config.mapping.is_last_pp_rank():
+            hidden_states = self.ln_f(hidden_states)
+        else:
+            hidden_states = send(hidden_states, self.mapping.next_pp_rank())
 
         if use_cache:
             return (hidden_states, tuple(presents))

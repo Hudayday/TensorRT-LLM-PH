@@ -25,6 +25,12 @@ def parse_arguments():
                         type=int,
                         default=1,
                         help='N-way pipeline parallelism size')
+    parser.add_argument('--pp_map',
+                        metavar='N',
+                        type=int,
+                        nargs='+',
+                        help='unbalanced PP maping'
+                        )
     parser.add_argument('--dtype',
                         type=str,
                         default='float16',
@@ -165,7 +171,8 @@ def convert_hf_gptj(hf_model: GPTJForCausalLM,
                     mapping: Mapping,
                     dtype: str = 'float32',
                     use_weight_only: bool = False,
-                    plugin_weight_only_quant_type: torch.dtype = torch.int8):
+                    plugin_weight_only_quant_type: torch.dtype = torch.int8,
+                    pp_map=None):
 
     weights = {}
     tik = time.time()
@@ -276,6 +283,10 @@ def main():
     args = parse_arguments()
     world_size = args.tp_size * args.pp_size
 
+    pp_map = args.pp_map
+    if pp_map is not None:
+        assert len(pp_map) == args.pp_size
+
     tik = time.time()
 
     if not os.path.exists(args.output_dir):
@@ -321,6 +332,7 @@ def main():
             'world_size': world_size,
             'tp_size': args.tp_size,
             'pp_size': args.pp_size,
+            'pp_map' : args.pp_map,
         },
         'rotary_dim': args.rotary_dim,
     }
@@ -335,7 +347,8 @@ def main():
         mapping = Mapping(world_size=world_size,
                           rank=rank,
                           tp_size=args.tp_size,
-                          pp_size=args.pp_size)
+                          pp_size=args.pp_size,
+                          pp_map=args.pp_map)
         hf_model = AutoModelForCausalLM.from_pretrained(args.model_dir,
                                                         trust_remote_code=True,
                                                         torch_dtype="auto")
@@ -345,7 +358,8 @@ def main():
             mapping,
             dtype=args.dtype,
             use_weight_only=args.use_weight_only,
-            plugin_weight_only_quant_type=plugin_weight_only_quant_type)
+            plugin_weight_only_quant_type=plugin_weight_only_quant_type,
+            pp_map=pp_map)
         del hf_model
 
         safetensors.torch.save_file(
