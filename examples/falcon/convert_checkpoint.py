@@ -27,6 +27,12 @@ def parse_arguments():
                         type=int,
                         default=1,
                         help='N-way pipeline parallelism size')
+    parser.add_argument('--pp_map',
+                        metavar='N',
+                        type=int,
+                        nargs='+',
+                        help='unbalanced PP maping'
+                        )
     parser.add_argument('--dtype',
                         type=str,
                         default='float16',
@@ -331,7 +337,8 @@ def convert_hf_falcon(hf_model: FalconForCausalLM,
                       sharding_dim: int = 0,
                       share_embedding_table: bool = False,
                       use_weight_only: bool = False,
-                      plugin_weight_only_quant_type: torch.dtype = torch.int8):
+                      plugin_weight_only_quant_type: torch.dtype = torch.int8,
+                      pp_map=None):
     weights = {}
     tik = time.time()
 
@@ -642,6 +649,10 @@ if __name__ == '__main__':
     args = parse_arguments()
     world_size = args.tp_size * args.pp_size
 
+    pp_map = args.pp_map
+    if pp_map is not None:
+        assert len(pp_map) == args.pp_size
+
     tik = time.time()
 
     if not os.path.exists(args.output_dir):
@@ -680,6 +691,7 @@ if __name__ == '__main__':
             'world_size': world_size,
             'tp_size': args.tp_size,
             'pp_size': args.pp_size,
+            'pp_map' : args.pp_map,
         },
         'bias': hf_config.bias,
         'parallel_attention': hf_config.parallel_attn,
@@ -693,7 +705,8 @@ if __name__ == '__main__':
         mapping = Mapping(world_size=world_size,
                           rank=rank,
                           tp_size=args.tp_size,
-                          pp_size=args.pp_size)
+                          pp_size=args.pp_size,
+                          pp_map=args.pp_map)
 
         if args.load_by_shard:
             weights = load_from_hf_falcon_checkpoint(
@@ -718,7 +731,8 @@ if __name__ == '__main__':
                 sharding_dim=args.embedding_sharding_dim,
                 share_embedding_table=args.use_embedding_sharing,
                 use_weight_only=args.use_weight_only,
-                plugin_weight_only_quant_type=plugin_weight_only_quant_type)
+                plugin_weight_only_quant_type=plugin_weight_only_quant_type,
+                pp_map=pp_map)
             del hf_model
 
         safetensors.torch.save_file(
