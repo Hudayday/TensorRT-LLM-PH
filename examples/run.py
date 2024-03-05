@@ -16,6 +16,9 @@
 import argparse
 import ast
 import csv
+import subprocess
+import signal
+import os
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +37,10 @@ if PYTHON_BINDINGS:
 
 def parse_arguments(args=None):
     parser = argparse.ArgumentParser()
+    parser.add_argument('--record_utilization',
+                        default=False,
+                        action='store_true',
+                        help="Record GPU utilization and memory usage.")
     parser.add_argument('--max_output_len', type=int, required=True)
     parser.add_argument(
         '--max_attention_window_size',
@@ -70,6 +77,12 @@ def parse_arguments(args=None):
         help=
         'CSV or Numpy file containing tokenized input. Alternative to text input.',
         default=None)
+    parser.add_argument(
+        '--file_size',
+        type=int,
+        help='Number of inputs (batch size) of given file',
+        default=1
+    )
     parser.add_argument('--max_input_length', type=int, default=923)
     parser.add_argument('--output_csv',
                         type=str,
@@ -85,17 +98,6 @@ def parse_arguments(args=None):
         help=
         'Numpy file where the generation logits are stored. Use only when num_beams==1',
         default=None)
-
-    parser.add_argument('--output_log_probs_npy',
-                        type=str,
-                        help='Numpy file where the log_probs are stored',
-                        default=None)
-
-    parser.add_argument('--output_cum_log_probs_npy',
-                        type=str,
-                        help='Numpy file where the cum_log_probs are stored',
-                        default=None)
-
     parser.add_argument('--tokenizer_dir',
                         help="HF tokenizer config path",
                         default='gpt2')
@@ -108,7 +110,7 @@ def parse_arguments(args=None):
                         help="Used for sentencepiece tokenizers")
     parser.add_argument('--num_beams',
                         type=int,
-                        help="Use beam search if num_beams > 1",
+                        help="Use beam search if num_beams >1",
                         default=1)
     parser.add_argument('--temperature', type=float, default=1.0)
     parser.add_argument('--top_k', type=int, default=1)
@@ -117,12 +119,6 @@ def parse_arguments(args=None):
     parser.add_argument('--repetition_penalty', type=float, default=1.0)
     parser.add_argument('--presence_penalty', type=float, default=0.0)
     parser.add_argument('--frequency_penalty', type=float, default=0.0)
-    parser.add_argument('--early_stopping',
-                        type=int,
-                        help='Use early stopping if num_beams > 1'
-                        '1 for early-stopping, 0 for non-early-stopping'
-                        'other values for stopping by length',
-                        default=1)
     parser.add_argument('--debug_mode',
                         default=False,
                         action='store_true',
@@ -207,17 +203,29 @@ def parse_input(tokenizer,
                                          max_length=max_input_length)
             batch_input_ids.append(input_ids)
     else:
+        prompt_count = args.file_size
         if input_file.endswith('.csv'):
             with open(input_file, 'r') as csv_file:
                 csv_reader = csv.reader(csv_file, delimiter=',')
+                next(csv_reader, None)
                 for line in csv_reader:
-                    input_ids = np.array(line, dtype='int32')
+                    prompt_count -= 1
+                    input_ids = tokenizer.encode(
+                                line[0],
+                                add_special_tokens=add_special_tokens,
+                                truncation=True,
+                                max_length=max_input_length)
                     batch_input_ids.append(input_ids[-max_input_length:])
+                    if prompt_count == 0:
+                        break
         elif input_file.endswith('.npy'):
             inputs = np.load(input_file)
             for row in inputs:
+                prompt_count -= 1
                 input_ids = row[row != pad_id]
                 batch_input_ids.append(input_ids[-max_input_length:])
+                if prompt_count == 0:
+                    break                
         elif input_file.endswith('.txt'):
             with open(input_file, 'r', encoding='utf-8',
                       errors='replace') as txt_file:
@@ -228,6 +236,7 @@ def parse_input(tokenizer,
                     truncation=True,
                     max_length=max_input_length)
                 batch_input_ids.append(input_ids)
+                batch_input_ids = batch_input_ids[:prompt_count]
         else:
             print('Input file format not supported.')
             raise SystemExit
@@ -261,11 +270,7 @@ def print_output(tokenizer,
                  output_npy=None,
                  context_logits=None,
                  generation_logits=None,
-                 cum_log_probs=None,
-                 log_probs=None,
-                 output_logits_npy=None,
-                 output_cum_log_probs_npy=None,
-                 output_log_probs_npy=None):
+                 output_logits_npy=None):
     batch_size, num_beams, _ = output_ids.size()
     if output_csv is None and output_npy is None:
         for batch_idx in range(batch_size):
@@ -320,20 +325,6 @@ def print_output(tokenizer,
         generation_outputs = np.array(generation_logits.cpu().contiguous(),
                                       dtype='float32')
         np.save(output_generation_logits_file, generation_outputs)
-
-    # Save cum log probs
-    if cum_log_probs is not None and output_cum_log_probs_npy is not None:
-        cum_log_probs_file = Path(output_cum_log_probs_npy)
-        cum_log_probs_outputs = np.array(cum_log_probs.cpu().contiguous(),
-                                         dtype='float32')
-        np.save(cum_log_probs_file, cum_log_probs_outputs)
-
-    # Save cum log probs
-    if log_probs is not None and output_log_probs_npy is not None:
-        log_probs_file = Path(output_log_probs_npy)
-        log_probs_outputs = np.array(log_probs.cpu().contiguous(),
-                                     dtype='float32')
-        np.save(log_probs_file, log_probs_outputs)
 
 
 def main(args):
@@ -428,14 +419,11 @@ def main(args):
             top_p=args.top_p,
             num_beams=args.num_beams,
             length_penalty=args.length_penalty,
-            early_stopping=args.early_stopping,
             repetition_penalty=args.repetition_penalty,
             presence_penalty=args.presence_penalty,
             frequency_penalty=args.frequency_penalty,
             stop_words_list=stop_words_list,
             bad_words_list=bad_words_list,
-            output_cum_log_probs=(args.output_cum_log_probs_npy != None),
-            output_log_probs=(args.output_log_probs_npy != None),
             lora_uids=args.lora_task_uids,
             prompt_table_path=args.prompt_table_path,
             prompt_tasks=args.prompt_tasks,
@@ -451,39 +439,22 @@ def main(args):
             if runtime_rank == 0:
                 output_ids = curr_outputs['output_ids']
                 sequence_lengths = curr_outputs['sequence_lengths']
-                cum_log_probs = None
-                log_probs = None
-                if args.output_cum_log_probs_npy != None:
-                    cum_log_probs = outputs['cum_log_probs']
-                if args.output_log_probs_npy != None:
-                    log_probs = outputs['log_probs']
-                print_output(
-                    tokenizer,
-                    output_ids,
-                    input_lengths,
-                    sequence_lengths,
-                    output_csv=args.output_csv,
-                    output_npy=args.output_npy,
-                    cum_log_probs=cum_log_probs,
-                    log_probs=log_probs,
-                    output_cum_log_probs_npy=args.output_cum_log_probs_npy,
-                    output_log_probs_npy=args.output_log_probs_npy)
+                print_output(tokenizer,
+                             output_ids,
+                             input_lengths,
+                             sequence_lengths,
+                             output_csv=args.output_csv,
+                             output_npy=args.output_npy)
     else:
         if runtime_rank == 0:
             output_ids = outputs['output_ids']
             sequence_lengths = outputs['sequence_lengths']
             context_logits = None
             generation_logits = None
-            cum_log_probs = None
-            log_probs = None
             if runner.gather_context_logits:
                 context_logits = outputs['context_logits']
             if runner.gather_generation_logits:
                 generation_logits = outputs['generation_logits']
-            if args.output_cum_log_probs_npy != None:
-                cum_log_probs = outputs['cum_log_probs']
-            if args.output_log_probs_npy != None:
-                log_probs = outputs['log_probs']
             print_output(tokenizer,
                          output_ids,
                          input_lengths,
@@ -492,16 +463,12 @@ def main(args):
                          output_npy=args.output_npy,
                          context_logits=context_logits,
                          generation_logits=generation_logits,
-                         output_logits_npy=args.output_logits_npy,
-                         cum_log_probs=cum_log_probs,
-                         log_probs=log_probs,
-                         output_cum_log_probs_npy=args.output_cum_log_probs_npy,
-                         output_log_probs_npy=args.output_log_probs_npy)
+                         output_logits_npy=args.output_logits_npy)
 
     if args.run_profiling:
         ite = 10
         # warmup
-        for _ in range(ite):
+        for _ in range(2):
             with torch.no_grad():
                 outputs = runner.generate(
                     batch_input_ids,
@@ -514,7 +481,6 @@ def main(args):
                     top_p=args.top_p,
                     num_beams=args.num_beams,
                     length_penalty=args.length_penalty,
-                    early_stopping=args.early_stopping,
                     repetition_penalty=args.repetition_penalty,
                     presence_penalty=args.presence_penalty,
                     frequency_penalty=args.frequency_penalty,
@@ -527,6 +493,22 @@ def main(args):
                     output_sequence_lengths=True,
                     return_dict=True)
                 torch.cuda.synchronize()
+
+        pid = -1
+        print('warm up ends')
+
+        if args.record_utilization:
+            command_record = [
+                "nvidia-smi",
+                "--query-gpu=timestamp,pci.bus_id,driver_version,pstate,pcie.link.gen.max,pcie.link.gen.current,temperature.gpu,utilization.gpu,utilization.memory,memory.total,memory.free,memory.used",
+                "--format=csv",
+                "-l", "1",
+                "-f", f"./GPU-{str(runtime_rank)}-record-{args.tokenizer_dir.replace('/', '')}-.csv"
+                ]
+                
+            process = subprocess.Popen(command_record) 
+            pid = process.pid
+            #print(f'the PID is: {pid}')
 
         tensorrt_llm.profiler.start("tmp")
         for _ in range(ite):
@@ -542,7 +524,6 @@ def main(args):
                     top_p=args.top_p,
                     num_beams=args.num_beams,
                     length_penalty=args.length_penalty,
-                    early_stopping=args.early_stopping,
                     repetition_penalty=args.repetition_penalty,
                     presence_penalty=args.presence_penalty,
                     frequency_penalty=args.frequency_penalty,
@@ -554,8 +535,13 @@ def main(args):
                     streaming=args.streaming,
                     output_sequence_lengths=True,
                     return_dict=True)
+
+                #print(tensorrt_llm.profiler.device_memory_info())
                 torch.cuda.synchronize()
         tensorrt_llm.profiler.stop("tmp")
+
+        if args.record_utilization:
+            os.kill(pid, signal.SIGINT)
 
         print(
             f"batch_size: {len(batch_input_ids)}, avg latency of {ite} iterations: : {tensorrt_llm.profiler.elapsed_time_in_sec('tmp') / ite} sec"
